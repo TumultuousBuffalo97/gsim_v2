@@ -3,6 +3,9 @@
 #include <ctime>
 #include <chrono>
 #include <thread>
+#ifdef DOUBLE_P
+#define float double
+#endif
 typedef struct part {
 	int n;
 	float xp,yp,xv,yv;
@@ -10,7 +13,7 @@ typedef struct part {
 float randf() {
 	return (float)rand()/(float)RAND_MAX;
 }
-void part_calcForce_safe(part *p1, part *p2,float dt) {
+void part_calcForce_safe(part *p1, part *p2,float dt) {//calculates force between particles, ignores collisions
 	float dx,dy,f;
 	dx=p2->xp-p1->xp;
 	dy=p2->yp-p1->yp;
@@ -25,7 +28,7 @@ void part_calcForce_safe(part *p1, part *p2,float dt) {
 	p2->xv-=dx/f;
 	p2->yv-=dy/f;
 }
-void part_calcForce(part *p1, part *p2,float dt) {
+void part_calcForce(part *p1, part *p2,float dt) {//calculates force between particles
 	float dx,dy,f;
 	dx=p2->xp-p1->xp;
 	dy=p2->yp-p1->yp;
@@ -39,32 +42,39 @@ void part_calcForce_mt(part *parts, int nparts, int pstart, int pend, float dt) 
 	int p1,p2;
 	for(p1=pstart;p1<pend;++p1) {
 		for(p2=p1+1;p2<nparts;++p2) {
+			//if SAFE_INTER is defined, use the collision safe force fucntion
+			#ifdef SAFE_INTER
+			part_calcForce_safe(&parts[p1],&parts[p2],dt);
+			#else
 			part_calcForce(&parts[p1],&parts[p2],dt);
+			#endif
 		}
 	}
 }
 int main(int argc, char *argv[]) {
-	if(argc!=7) {
+	/*if(argc!=7) {
 		printf("arguments: nframes xres yres nparts dt nthreads\n");
 		exit(0);
-	}
+	}*/
 	#ifdef LINUX
 	system("clear");
 	#endif
 	printf("Initializing...\n");
 	FILE *fp=fopen("./out.gsim","wb");
-	int nthreads=atoi(argv[6]);//doesnt do anything rn
 	int nframes=atoi(argv[1]);
 	int xr=atoi(argv[2]);;
 	int yr=atoi(argv[3]);;
 	int nparts=atoi(argv[4]);;
 	float dt=atof(argv[5]);
+	int nthreads=atoi(argv[6]);
 	dt*=60.0;
 	srand(0);
+	//write simulation info to file
 	fwrite(&nframes,sizeof(int),1,fp);
 	fwrite(&xr,sizeof(int),1,fp);
 	fwrite(&yr,sizeof(int),1,fp);
 	fwrite(&nparts,sizeof(int),1,fp);
+	//allocate memory for paticles and initialize them
 	part *parts=(part*)calloc(nparts,sizeof(part));
 	{//initialize parts
 		int p;
@@ -72,26 +82,22 @@ int main(int argc, char *argv[]) {
 			parts[p].n=p;
 			parts[p].xp=randf()*(xr-1);
 			parts[p].yp=randf()*(yr-1);
-			//printf("part:%d, x:%f, y:%f\n",p,parts[p].xp,parts[p].yp);
 			parts[p].xv=0;
 			parts[p].yv=0;
 		}
 	}
-	
-	
 	{//integrate
 		int f,p,p1,p2;
 		float nx,ny;
 		
 		int t;
 		std::thread *threads=(std::thread*)calloc(nthreads,sizeof(std::thread));
-		//int *tRanges=(int*)calloc(sizeof(int),nthreads+1);
 		int *tRanges=(int*)calloc(sizeof(int),nthreads+1);
 		if(nthreads>1) {
-			printf("Computing thread ranges...\n");
-			long unsigned int nInters=0.5*nparts*nparts-0.5*nparts;
-			long unsigned int nIntersPerThread=nInters/nthreads;
-			long unsigned int count=0;
+			printf("Scheduling threads...\n");
+			unsigned long long nInters=0.5*nparts*nparts-0.5*nparts;
+			unsigned long long nIntersPerThread=nInters/nthreads;
+			unsigned long long count=0;
 			int ntd=1;
 			for(p1=0;p1<nparts;++p1) {
 				for(p2=p1+1;p2<nparts;++p2) {
@@ -129,7 +135,7 @@ int main(int argc, char *argv[]) {
 				//check if the particles are going to be out of bounds
 				nx=parts[p].xp+parts[p].xv;
 				ny=parts[p].yp+parts[p].yv;
-				//reclect them off the bounds
+				//reflect them off the bounds
 				if(nx>=xr|nx<=0) {
 					parts[p].xv*=-.5;
 				}
@@ -137,8 +143,17 @@ int main(int argc, char *argv[]) {
 					parts[p].yv*=-.5;
 				}
 				//write the positions to the output files
+				#ifdef DOUBLE_P
+				#undef float
+				float xpf=parts[p].xp;
+				float ypf=parts[p].yp;
+				fwrite(&xpf,sizeof(float),1,fp);
+				fwrite(&ypf,sizeof(float),1,fp);
+				#define float double
+				#else
 				fwrite(&parts[p].xp,sizeof(float),1,fp);
 				fwrite(&parts[p].yp,sizeof(float),1,fp);
+				#endif
 				//step them forwards
 				parts[p].xp+=parts[p].xv;
 				parts[p].yp+=parts[p].yv;
@@ -147,11 +162,11 @@ int main(int argc, char *argv[]) {
 			std::chrono::milliseconds elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
 			#ifdef WINDOWS
 			//printf("frame: %d, frametime: %lu, framerate: %f\r",f,(clock()-start)*1000/CLOCKS_PER_SEC,1000.0/(clock()-start)*1000/CLOCKS_PER_SEC);
-			printf("frame:%d, frametime:%ums, framerate: %f\r",f,elapsed.count(),1000.0/elapsed.count());
+			printf("frame:%d, frametime:%llums, framerate: %f\r",f,elapsed.count(),1000.0/elapsed.count());
 			#endif
 			#ifdef LINUX 
 			//printf("\033[2;0Hframe: %d, frametime: %lu, framerate: %f\n",f,(clock()-start)*1000/CLOCKS_PER_SEC,1000.0/(clock()-start)*1000/CLOCKS_PER_SEC);
-			printf("\033[2;0Hframe:%d, frametime:%ums\n",f,elapsed.count());
+			printf("\033[3;0Hframe:%d, frametime:%llums\n",f,elapsed.count());
 			#endif
 		}
 	}
